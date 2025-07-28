@@ -13,12 +13,49 @@ from einops import rearrange, repeat
 try:
     from causal_conv1d import causal_conv1d_fn, causal_conv1d_update
 except ImportError:
-    causal_conv1d_fn, causal_conv1d_update = None
+    def causal_conv1d_fn(x, weight, bias=None, activation=None):
+        """
+        x: (batch, dim, seqlen)
+        weight: (dim, width)
+        bias: (dim,)
+        out: (batch, dim, seqlen)
+        """
+        if activation not in [None, "silu", "swish"]:
+            raise NotImplementedError("activation must be None, silu, or swish")
+        dtype_in = x.dtype
+        x = x.to(weight.dtype)
+        seqlen = x.shape[-1]
+        dim, width = weight.shape
+        out = F.conv1d(x, weight.unsqueeze(1), bias, padding=width - 1, groups=dim)
+        out = out[..., :seqlen]
+        return (out if activation is None else F.silu(out)).to(dtype=dtype_in)
+
+    def causal_conv1d_update(x, conv_state, weight, bias=None, activation=None):
+        """
+        x: (batch, dim)
+        conv_state: (batch, dim, width)
+        weight: (dim, width)
+        bias: (dim,)
+        out: (batch, dim)
+        """
+        if activation not in [None, "silu", "swish"]:
+            raise NotImplementedError("activation must be None, silu, or swish")
+        dtype_in = x.dtype
+        batch, dim = x.shape
+        width = weight.shape[1]
+        assert conv_state.shape == (batch, dim, width)
+        assert weight.shape == (dim, width)
+        conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1)) # Update state (B D W)
+        conv_state[:, :, -1] = x
+        out = torch.sum(conv_state * weight, dim=-1) # (B D)
+        if bias is not None:
+            out += bias
+        return (out if activation is None else F.silu(out)).to(dtype=dtype_in)
 
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn, bimamba_inner_fn, mamba_inner_fn_no_out_proj
 except ImportError:
-    selective_scan_fn, mamba_inner_fn, bimamba_inner_fn, mamba_inner_fn_no_out_proj = None, None, None, None, None
+    selective_scan_fn, mamba_inner_fn, bimamba_inner_fn, mamba_inner_fn_no_out_proj = None, None, None, None
 
 try:
     from mamba_ssm.ops.triton.selective_state_update import selective_state_update
@@ -26,9 +63,11 @@ except ImportError:
     selective_state_update = None
 
 try:
-    from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
-    RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
+    RMSNorm = nn.LayerNorm
+    layer_norm_fn = None
+    rms_norm_fn = None
 
 class Mamba(nn.Module):
     def __init__(
@@ -268,7 +307,16 @@ class Mamba(nn.Module):
                 # Instead F.pad will pad with zeros if seqlen < self.d_conv, and truncate otherwise.
                 conv_state.copy_(F.pad(x, (self.d_conv - x.shape[-1], 0)))  # Update state (B D W)
             if causal_conv1d_fn is None:
-                x = self.act(self.conv1d(x)[..., :seqlen])
+                # fallback: use F.conv1d with groups, then apply激活
+                x = F.conv1d(
+                    x,
+                    weight=self.conv1d.weight,
+                    bias=self.conv1d.bias,
+                    stride=1,
+                    padding=self.d_conv - 1,
+                    groups=self.d_inner,
+                )[..., :seqlen]
+                x = self.act(x)
             else:
                 assert self.activation in ["silu", "swish"]
                 x = causal_conv1d_fn(
@@ -319,7 +367,9 @@ class Mamba(nn.Module):
         if causal_conv1d_update is None:
             conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
             conv_state[:, :, -1] = x
-            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+            # fallback: use conv1d with groups for the last window
+            x_window = conv_state
+            x = torch.sum(x_window * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
             if self.conv1d.bias is not None:
                 x = x + self.conv1d.bias
             x = self.act(x).to(dtype=dtype)

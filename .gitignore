@@ -1,18 +1,66 @@
-.DS_Store
-causal-conv1d/causal_conv1d/__pycache__/*
-mamba/mamba_ssm/utils/__pycache__/*
-mamba/mamba_ssm/ops/triton/__pycache__/*
-mamba/mamba_ssm/ops/__pycache__/*
-mamba/mamba_ssm/modules/__pycache__/*
-mamba/mamba_ssm/__pycache__/*
-mamba/mamba_ssm/models/__pycache__/*
-causal-conv1d/build/
-causal-conv1d/causal_conv1d.egg-info/
-causal-conv1d/causal_conv1d_cuda.cpython-310-x86_64-linux-gnu.so
-mamba/build/
-mamba/mamba_ssm.egg-info/
-mamba/selective_scan_cuda.cpython-310-x86_64-linux-gnu.so
-reference/
-causal-conv1d/
-work_dirs/
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# PyTorch
+*.pth
+*.pt
+*.ckpt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model weights and checkpoints
+vim_t_midclstok_76p1acc.pth
+vim_tiny_cpu.pth
+*.pth
+*.pt
+
+# Temporary files
+*.tmp
+*.temp
+
+# Output files
+output/
+results/
