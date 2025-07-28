@@ -13,10 +13,30 @@ ICML 2024 ([conference paper](https://icml.cc/virtual/2024/poster/33768)), ArXiv
 
 </div>
 
+## CPU-Compatible Version
+
+This is a CPU-compatible version of Vision Mamba with the following modifications:
+
+- **Fallback implementations** for `causal_conv1d` operations when CUDA kernels are not available
+- **CPU-optimized** selective scan operations
+- **Robust error handling** for environments without specific CUDA dependencies
+- **Pure PyTorch implementations** for all critical operations
+
+### Key Features for CPU Usage:
+- No CUDA dependencies required
+- Automatic fallback to PyTorch implementations
+- Compatible with CPU-only environments (e.g., Raspberry Pi, cloud instances)
+- Maintains full functionality of the original Vision Mamba model
+
+### Usage:
+```bash
+# Run inference on CPU
+python infer_vim_tiny.py
+```
+
+The model will automatically use CPU-optimized implementations and provide throughput statistics.
 
 #
-
-
 
 ### News
 * **` May. 2nd, 2024`:** Vision Mamba (Vim) is accepted by ICML2024. 🎉 Conference page can be found [here](https://icml.cc/virtual/2024/paper_metadata_from_author/33768).
