@@ -26,7 +26,10 @@ import random
 
 try:
     from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
-except ImportError:
+    print("[INFO] Successfully imported fused layernorm functions")
+except ImportError as e:
+    print(f"[WARNING] Failed to import fused layernorm functions: {e}")
+    print("[INFO] Using fallback implementation")
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
 

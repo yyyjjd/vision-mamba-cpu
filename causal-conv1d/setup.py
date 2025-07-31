@@ -38,6 +38,10 @@ FORCE_BUILD = os.getenv("CAUSAL_CONV1D_FORCE_BUILD", "FALSE") == "TRUE"
 SKIP_CUDA_BUILD = os.getenv("CAUSAL_CONV1D_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
 FORCE_CXX11_ABI = os.getenv("CAUSAL_CONV1D_FORCE_CXX11_ABI", "FALSE") == "TRUE"
+# 添加环境变量检查，如果强制回退则跳过CUDA构建
+CAUSAL_CONV1D_FORCE_FALLBACK = os.environ.get("CAUSAL_CONV1D_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+if CAUSAL_CONV1D_FORCE_FALLBACK:
+    SKIP_CUDA_BUILD = True
 
 
 def get_platform():

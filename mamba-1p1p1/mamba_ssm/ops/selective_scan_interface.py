@@ -143,7 +143,11 @@ def selective_scan_fn(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_
     last_state has shape (batch, dim, dstate). Note that the gradient of the last state is
     not considered in the backward pass.
     """
-    if _has_cuda:
+    # 检查环境变量，如果强制使用fallback则直接使用参考实现
+    import os
+    SELECTIVE_SCAN_FORCE_FALLBACK = os.environ.get("SELECTIVE_SCAN_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+    
+    if _has_cuda and not SELECTIVE_SCAN_FORCE_FALLBACK:
         try:
             return SelectiveScanFn.apply(u, delta, A, B, C, D, z, delta_bias, delta_softplus, return_last_state)
         except Exception as e:
@@ -232,6 +236,13 @@ class MambaInnerFnNoOutProj(torch.autograd.Function):
         """
              xz: (batch, dim, seqlen)
         """
+        # 检查环境变量和CUDA可用性
+        import os
+        SELECTIVE_SCAN_FORCE_FALLBACK = os.environ.get("SELECTIVE_SCAN_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+        
+        if not _has_cuda or SELECTIVE_SCAN_FORCE_FALLBACK:
+            raise RuntimeError("MambaInnerFnNoOutProj requires CUDA support but it's not available or forced to use fallback")
+            
         assert checkpoint_lvl in [0, 1]
         L = xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
@@ -387,6 +398,13 @@ class MambaInnerFn(torch.autograd.Function):
         """
              xz: (batch, dim, seqlen)
         """
+        # 检查环境变量和CUDA可用性
+        import os
+        SELECTIVE_SCAN_FORCE_FALLBACK = os.environ.get("SELECTIVE_SCAN_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+        
+        if not _has_cuda or SELECTIVE_SCAN_FORCE_FALLBACK:
+            raise RuntimeError("MambaInnerFn requires CUDA support but it's not available or forced to use fallback")
+            
         # Check if causal_conv1d_cuda is available, otherwise use fallback
         if causal_conv1d_cuda is None:
             print("[WARNING] causal_conv1d_cuda is not available, using fallback implementation")
@@ -554,6 +572,13 @@ class BiMambaInnerFn(torch.autograd.Function):
         """
              xz: (batch, dim, seqlen)
         """
+        # 检查环境变量和CUDA可用性
+        import os
+        SELECTIVE_SCAN_FORCE_FALLBACK = os.environ.get("SELECTIVE_SCAN_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+        
+        if not _has_cuda or SELECTIVE_SCAN_FORCE_FALLBACK:
+            raise RuntimeError("BiMambaInnerFn requires CUDA support but it's not available or forced to use fallback")
+            
         assert checkpoint_lvl in [0, 1]
         L = xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]

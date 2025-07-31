@@ -5,26 +5,69 @@ import time
 import sys
 import os
 
+# 设置CPU环境变量，强制使用fallback实现
+os.environ["CAUSAL_CONV1D_FORCE_FALLBACK"] = "TRUE"
+os.environ["SELECTIVE_SCAN_FORCE_FALLBACK"] = "TRUE"
+
 # 1. 导入模型注册函数
 sys.path.append(os.path.dirname(__file__))  # 保证能import本地模块
-from models_mamba import vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2
+
+# 添加mamba-1p1p1路径，确保能找到mamba_ssm包
+mamba_path = os.path.join(os.path.dirname(__file__), 'mamba-1p1p1')
+if os.path.exists(mamba_path):
+    sys.path.insert(0, mamba_path)
+    print(f"[INFO] Added mamba path: {mamba_path}")
+
+from models_mamba import (
+    vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2,
+    vim_small_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2
+)
 
 # 配置
-CKPT_PATH = 'vim_t_midclstok_76p1acc.pth'  # 你的权重路径
+MODEL_TYPE = 'vim_small'  # 可选: 'vim_tiny', 'vim_small'
+
+# 根据模型类型设置配置
+if MODEL_TYPE == 'vim_tiny':
+    CKPT_PATH = 'vim_t_midclstok_76p1acc.pth'  # vim_tiny权重路径
+    MODEL_FUNC = vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2
+    EMBED_DIM = 192
+    DEPTH = 24
+    D_STATE = 16
+elif MODEL_TYPE == 'vim_small':
+    CKPT_PATH = 'vim_s_midclstok_80p5acc.pth'  # vim_small权重路径 - 请根据实际文件名调整
+    MODEL_FUNC = vim_small_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2
+    EMBED_DIM = 384
+    DEPTH = 24
+    D_STATE = 16
+else:
+    raise ValueError(f"Unsupported model type: {MODEL_TYPE}")
+
 DEVICE = 'cpu'  # 树莓派建议用cpu
 BATCH_SIZE = 8
 NUM_IMAGES = 100  # 可改为1000
 input_size = 224
 
+print(f"[INFO] Using model: {MODEL_TYPE}")
+print(f"[INFO] Embed dim: {EMBED_DIM}, Depth: {DEPTH}, D_state: {D_STATE}")
+
 # 2. 加载模型
-model = vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2(num_classes=1000)
+model = MODEL_FUNC(num_classes=1000)
 model.eval()
 model.to(DEVICE)
-ckpt = torch.load(CKPT_PATH, map_location=DEVICE, weights_only=False)
-if 'model' in ckpt:
-    ckpt = ckpt['model']
-state_dict = model.state_dict()
-model.load_state_dict(ckpt, strict=True)
+
+# 检查权重文件是否存在
+if not os.path.exists(CKPT_PATH):
+    print(f"[WARNING] Checkpoint file {CKPT_PATH} not found!")
+    print(f"[INFO] Please make sure the checkpoint file exists or update CKPT_PATH")
+    print(f"[INFO] For vim_small, you might need to download the weights first")
+    print(f"[INFO] You can set MODEL_TYPE = 'vim_tiny' to use the existing tiny model")
+else:
+    ckpt = torch.load(CKPT_PATH, map_location=DEVICE, weights_only=False)
+    if 'model' in ckpt:
+        ckpt = ckpt['model']
+    state_dict = model.state_dict()
+    model.load_state_dict(ckpt, strict=True)
+    print(f"[INFO] Successfully loaded checkpoint: {CKPT_PATH}")
 
 # 3. 生成随机图片数据
 all_imgs = torch.randn(NUM_IMAGES, 3, input_size, input_size)
@@ -90,9 +133,10 @@ all_imgs = torch.randn(NUM_IMAGES, 3, input_size, input_size)
 # print(f"Head FLOPs: {head_flops/1e6:.2f} MFLOPs")
 # print(f"Total FLOPs (theoretical, single 224x224 image): {total_flops/1e9:.2f} GFLOPs\n")
 
-# 用 thop 统计整个模型的 FLOPs
-from thop import profile
-from thop import clever_format
+# 准备输入数据
+inputs = torch.randn(1, 3, input_size, input_size)
+
+# 统计参数量、文件大小和推理时间
 import time
 import os
 import numpy as np
@@ -106,56 +150,71 @@ def get_FileSize(filePath):
 # 计算模型文件大小
 mb = get_FileSize(CKPT_PATH)
 
-# 统计 FLOPs 和参数量
-inputs = torch.randn(1, 3, input_size, input_size)
-flops, params = profile(model, (inputs,))
-
-macs, params = clever_format([flops, params], "%.3f")
+# 统计参数量
+model_param_count = sum(p.numel() for p in model.parameters())
 
 # 统计推理时间
 start = time.time()
 outputs = model(inputs)
 infer_time_record = time.time() - start
 
-print('flops: ', macs, ', params: ', params, ', infertime: ', np.mean(infer_time_record), ',mb: ', str(mb)+'MB')
+print(f"📊 模型参数量: {model_param_count/1e6:.2f}M")
+print(f"📊 模型文件大小: {mb}MB")
+print(f"📊 单张图片推理时间: {np.mean(infer_time_record):.4f}秒")
 
-# 4. 用 fvcore 统计 FLOPs（作为对比）
-print("\n=== fvcore FLOPs 统计（对比验证）===")
+# 1. 项目标准FLOPs计算方法（detectron2风格）
+print("\n=== 项目标准FLOPs计算方法（detectron2风格）===")
+print("🔧 这是项目det/tools/analyze_model.py中使用的标准FLOPs计算方法")
+print("🔧 特点：基于fvcore的自动统计，标准化程度高")
 try:
-    from fvcore.nn import FlopCountAnalysis
-    
-    # 使用 fvcore 统计
-    flops_fvcore = FlopCountAnalysis(model, inputs)
-    total_flops_fvcore = flops_fvcore.total()
-    total_params_fvcore = sum(p.numel() for p in model.parameters())
-    
-    print(f'fvcore FLOPs: {total_flops_fvcore/1000**3:.3f}G')
-    print(f'fvcore Params: {total_params_fvcore/1000**2:.1f}M')
-    
-    # 对比 thop 和 fvcore 的结果
-    thop_flops_g = float(macs.replace('G', '')) if 'G' in macs else float(macs.replace('M', '')) / 1000
-    print(f'\n=== 统计结果对比 ===')
-    print(f'thop FLOPs:     {thop_flops_g:.3f}G')
-    print(f'fvcore FLOPs:   {total_flops_fvcore/1e9:.3f}G')
-    print(f'差异:           {abs(thop_flops_g - total_flops_fvcore/1000**3):.3f}G')
-    print(f'差异比例:       {abs(thop_flops_g - total_flops_fvcore/1000**3)/max(thop_flops_g, total_flops_fvcore/1000**3)*100:.1f}%')
-    
-    # 如果 fvcore 统计成功，显示详细分析
-    print(f'\n=== fvcore 详细分析 ===')
-    print("按模块统计:")
-    print(flops_fvcore.by_module())
-    print("\n按操作类型统计:")
-    print(flops_fvcore.by_operator())
-    
-except ImportError:
-    print("❌ fvcore 未安装，跳过 fvcore 统计")
-    print("   安装命令: pip install fvcore")
+    # 添加det路径以导入项目标准分析工具
+    det_path = os.path.join(os.path.dirname(__file__), 'det')
+    if os.path.exists(det_path):
+        sys.path.insert(0, det_path)
+        print(f"[INFO] Added det path: {det_path}")
+        
+        from detectron2.utils.analysis import FlopCountAnalysis as DetFlopCountAnalysis
+        from detectron2.utils.analysis import flop_count_operators
+        
+        # 方法1：使用detectron2的FlopCountAnalysis
+        print("🔍 方法1：detectron2 FlopCountAnalysis")
+        det_flops = DetFlopCountAnalysis(model, inputs)
+        det_total_flops = det_flops.total()
+        det_by_operator = det_flops.by_operator()
+        
+        print(f"detectron2 FLOPs: {det_total_flops/1e9:.3f}G")
+        print("按操作类型统计:")
+        for op, count in det_by_operator.items():
+            print(f"  {op}: {count/1e9:.3f}G")
+        
+        # 方法2：使用flop_count_operators函数
+        print("\n🔍 方法2：flop_count_operators")
+        # 准备detectron2格式的输入
+        det_inputs = [{"image": inputs}]
+        op_flops = flop_count_operators(model, det_inputs)
+        
+        print("操作级别FLOPs统计:")
+        for op, count in op_flops.items():
+            print(f"  {op}: {count:.3f}G")
+        
+        sum_op_flops = sum(op_flops.values())
+        print(f"总FLOPs (flop_count_operators): {sum_op_flops:.3f}G")
+        
+    else:
+        print("❌ det目录不存在，跳过项目标准FLOPs计算")
+        print("   请确保det目录在项目根目录下")
+        
+except ImportError as e:
+    print(f"❌ 导入detectron2分析工具失败: {e}")
+    print("   可能原因: detectron2未安装或路径配置问题")
 except Exception as e:
-    print(f"❌ fvcore 统计失败: {e}")
-    print("   可能原因: 模型包含自定义操作，fvcore 无法识别")
+    print(f"❌ 项目标准FLOPs计算失败: {e}")
 
-# 理论计算 thop 统计不到的模块 FLOPs
-print("\n=== 理论 FLOPs 计算（thop 统计不到的模块）===")
+
+
+# 2. 自定义理论FLOPs计算（针对BiMamba v2优化）
+print("\n=== 自定义理论FLOPs计算（针对BiMamba v2优化）===")
+print("🔧 特点：手动计算每个模块的FLOPs，包含BiMamba v2特有的双向处理操作")
 
 # 双重验证：既从模型获取，又提供硬编码fallback
 
@@ -212,14 +271,14 @@ try:
     
 except Exception as e:
     print(f"⚠️ 从模型获取参数失败: {e}")
-    print("🔄 使用硬编码参数（Vim-tiny 标准配置）")
+    print(f"🔄 使用硬编码参数（{MODEL_TYPE} 标准配置）")
     
-    # 方法2：硬编码参数（Vim-tiny 标准配置）
+    # 方法2：硬编码参数（根据模型类型）
     img_size = 224
     patch_size = 16
-    embed_dim = 192
-    depth = 24
-    d_state = 16
+    embed_dim = EMBED_DIM  # 使用全局变量
+    depth = DEPTH  # 使用全局变量
+    d_state = D_STATE  # 使用全局变量
     num_classes = 1000
     num_patches = (img_size // patch_size) ** 2
 
@@ -236,9 +295,9 @@ print(f"   num_patches: {num_patches}")
 # 参数合理性检查
 assert img_size == 224, f"img_size 应该是 224，实际是 {img_size}"
 assert patch_size == 16, f"patch_size 应该是 16，实际是 {patch_size}"
-assert embed_dim == 192, f"embed_dim 应该是 192，实际是 {embed_dim}"
-assert depth == 24, f"depth 应该是 24，实际是 {depth}"
-assert d_state == 16, f"d_state 应该是 16，实际是 {d_state}"
+assert embed_dim == EMBED_DIM, f"embed_dim 应该是 {EMBED_DIM}，实际是 {embed_dim}"
+assert depth == DEPTH, f"depth 应该是 {DEPTH}，实际是 {depth}"
+assert d_state == D_STATE, f"d_state 应该是 {D_STATE}，实际是 {d_state}"
 assert num_patches == 196, f"num_patches 应该是 196，实际是 {num_patches}"
 
 print("✅ 所有参数验证通过！")
@@ -337,38 +396,28 @@ print(f"  除法操作 (BiMamba v2): {divide_total_flops/1e9:.3f}G")
 print(f"  Head: {head_flops/1e9:.3f}G")
 print(f"  总计: {total_theoretical_flops/1e9:.3f}G")
 
-# 官方风格的简化 FLOPs 计算（只计算主要操作）
-print("\n=== 官方风格简化 FLOPs 计算 ===")
 
-# 1. Patch Embedding (官方标准)
-official_patch_embed_flops = 2 * embed_dim * num_patches * 3 * patch_size * patch_size
 
-# 2. SSM 操作 (官方标准，简化)
-official_ssm_flops = 2 * embed_dim * num_patches * d_state * depth
+# 3. 综合FLOPs对比总结
+print(f"\n=== 综合FLOPs对比总结 ===")
+print(f"📊 {MODEL_TYPE} 模型 FLOPs 统计对比:")
 
-# 3. MLP 操作 (官方标准，简化)
-official_mlp_flops = 2 * num_patches * embed_dim * embed_dim * depth
+# 尝试获取项目标准FLOPs结果进行对比
+try:
+    if 'det_total_flops' in locals():
+        print(f"  项目标准 (detectron2): {det_total_flops/1e9:.3f}G")
+    if 'sum_op_flops' in locals():
+        print(f"  项目标准 (operators): {sum_op_flops:.3f}G")
+except:
+    pass
 
-# 4. Head (官方标准)
-official_head_flops = 2 * embed_dim * num_classes
+print(f"  自定义理论计算:      {total_theoretical_flops/1e9:.3f}G")
 
-# 官方风格总 FLOPs
-official_total_flops = official_patch_embed_flops + official_ssm_flops + official_mlp_flops + official_head_flops
+print(f"\n💡 说明:")
+print(f"  - 项目标准：detectron2框架的标准FLOPs计算方法")
+print(f"  - 自定义理论：基于模型架构的手动计算，包含BiMamba v2的特殊操作")
 
-print(f"📊 官方风格 FLOPs 分解:")
-print(f"  Patch Embedding: {official_patch_embed_flops/1e9:.3f}G")
-print(f"  SSM: {official_ssm_flops/1e9:.3f}G")
-print(f"  MLP: {official_mlp_flops/1e9:.3f}G")
-print(f"  Head: {official_head_flops/1e9:.3f}G")
-print(f"  总计 (官方风格): {official_total_flops/1e9:.3f}G")
-
-print(f"\n📊 对比分析:")
-print(f"  详细计算: {total_theoretical_flops/1e9:.3f}G")
-print(f"  官方风格: {official_total_flops/1e9:.3f}G")
-print(f"  差异: {abs(total_theoretical_flops - official_total_flops)/1e9:.3f}G")
-print(f"  差异比例: {abs(total_theoretical_flops - official_total_flops)/max(total_theoretical_flops, official_total_flops)*100:.1f}%")
-
-# 5. 吞吐量统计
+# 4. 吞吐量统计
 # num_batches = (len(all_imgs) + BATCH_SIZE - 1) // BATCH_SIZE
 # start = time.time()
 # with torch.no_grad():
@@ -382,6 +431,7 @@ print(f"  差异比例: {abs(total_theoretical_flops - official_total_flops)/max
 # print(f"Processed {len(all_imgs)} images in {total_time:.2f} seconds")
 # print(f"Average throughput: {throughput:.2f} images/second")
 # print(f"Average time per image: {total_time / len(all_imgs):.4f} seconds")
+
 # 吞吐量统计参数
 batch_size = 1
 num_images = 1000
@@ -398,25 +448,30 @@ with open(log_file, "w") as f:
         with torch.no_grad():
             _ = model(input_tensor)
         t1 = time.time()
-        elapsed = t1 - t0
-        throughput = batch_size / elapsed if elapsed > 0 else 0
+        throughput = batch_size / (t1 - t0)
         throughputs.append(throughput)
+        
         if (i + 1) % log_interval == 0:
             avg_throughput = sum(throughputs[-log_interval:]) / log_interval
-            msg = f"Image {i+1}/{num_images}, Avg throughput (last {log_interval}): {avg_throughput:.4f} img/s"
-            print(msg)
-            f.write(msg + "\n")
-    total_time = time.time() - start_time
-    overall_avg = sum(throughputs) / len(throughputs)
-    summary = f"\nTotal time: {total_time:.2f}s, Overall avg throughput: {overall_avg:.2f} img/s"
-    print(summary)
-    f.write(summary + "\n")
+            f.write(f"Batch {i+1}: {avg_throughput:.2f} images/sec\n")
+            print(f"Batch {i+1}: {avg_throughput:.2f} images/sec")
 
-# 统计参数量
+end_time = time.time()
+total_time = end_time - start_time
+avg_throughput = sum(throughputs) / len(throughputs)
+
+print(f"\n=== 吞吐量统计结果 ===")
+print(f"总处理时间: {total_time:.2f} 秒")
+print(f"平均吞吐量: {avg_throughput:.2f} images/sec")
+print(f"平均每张图片时间: {total_time / num_images:.4f} 秒")
+print(f"详细日志已保存到: {log_file}")
+
+# 4. 统计参数量
 model_param_count = sum(p.numel() for p in model.parameters())
-print(f"Total parameters: {model_param_count/1e6:.2f}M")
+print(f"\n📊 模型参数量: {model_param_count/1e6:.2f}M")
 
 # 保存模型权重到本地
 model_cpu = model.to('cpu')
-torch.save(model_cpu.state_dict(), "vim_tiny_cpu.pth")
-print("模型权重已保存到 vim_tiny_cpu.pth") 
+save_path = f"{MODEL_TYPE}_cpu.pth"
+torch.save(model_cpu.state_dict(), save_path)
+print(f"模型权重已保存到 {save_path}") 

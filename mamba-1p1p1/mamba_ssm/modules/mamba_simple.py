@@ -230,7 +230,13 @@ class Mamba(nn.Module):
 
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
-        if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
+        
+        # 检查环境变量，在CPU环境下禁用fast_path
+        import os
+        SELECTIVE_SCAN_FORCE_FALLBACK = os.environ.get("SELECTIVE_SCAN_FORCE_FALLBACK", "FALSE").upper() == "TRUE"
+        use_fast_path = self.use_fast_path and not SELECTIVE_SCAN_FORCE_FALLBACK
+        
+        if use_fast_path and inference_params is None:  # Doesn't support outputting the states
             if self.bimamba_type == "v1":
                 A_b = -torch.exp(self.A_b_log.float())
                 out = bimamba_inner_fn(
